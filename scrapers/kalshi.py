@@ -24,7 +24,11 @@ def _load_private_key(path: str):
 
 def _sign(private_key, timestamp_ms: int, method: str, path: str) -> str:
     msg = f"{timestamp_ms}{method}{path}".encode()
-    sig = private_key.sign(msg, padding.PKCS1v15(), hashes.SHA256())
+    sig = private_key.sign(
+        msg,
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
+        hashes.SHA256(),
+    )
     return base64.b64encode(sig).decode()
 
 
@@ -65,13 +69,14 @@ class KalshiScraper(BaseScraper):
             return resp
         return resp  # return last response even if still 429
 
-    def fetch_markets(self) -> list[Market]:
+    def fetch_markets(self, max_pages: int = 15) -> list[Market]:
         markets = []
         self._raw_cache.clear()
         cursor = None
+        pages = 0
 
-        while True:
-            params: dict = {"limit": 200, "status": "open"}
+        while pages < max_pages:
+            params: dict = {"limit": 200}
             if cursor:
                 params["cursor"] = cursor
 
@@ -84,11 +89,12 @@ class KalshiScraper(BaseScraper):
                 markets.append(self._parse_market(m))
 
             cursor = data.get("cursor")
+            pages += 1
             if not cursor:
                 break
             time.sleep(2.0)
 
-        print(f"[kalshi] Fetched {len(markets)} open markets")
+        print(f"[kalshi] Fetched {len(markets)} markets ({pages} pages)")
         return markets
 
     def _parse_market(self, m: dict) -> Market:

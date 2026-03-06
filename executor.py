@@ -27,7 +27,11 @@ def _load_key():
 
 def _sign(private_key, ts: int, method: str, path: str) -> str:
     msg = f"{ts}{method}{path}".encode()
-    sig = private_key.sign(msg, padding.PKCS1v15(), hashes.SHA256())
+    sig = private_key.sign(
+        msg,
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
+        hashes.SHA256(),
+    )
     return base64.b64encode(sig).decode()
 
 
@@ -61,12 +65,16 @@ def place_order(trade: dict) -> dict:
     path = "/trade-api/v2/portfolio/orders"
     headers = _auth_headers(private_key, "POST", path)
 
+    yes_price = trade.get("yes_price")
+    price_cents = int(round((yes_price if side == "yes" else 1 - yes_price) * 100)) if yes_price else 50
+
     payload = {
-        "ticker":  market_id,
-        "action":  "buy",
-        "type":    "market",
-        "side":    side,
-        "count":   count,
+        "ticker":    market_id,
+        "action":    "buy",
+        "type":      "limit",
+        "side":      side,
+        "count":     count,
+        "yes_price": price_cents if side == "yes" else 100 - price_cents,
     }
 
     resp = httpx.post(f"{BASE_URL}/portfolio/orders", headers=headers, json=payload, timeout=15)
@@ -92,7 +100,7 @@ def _log_trade(trade: dict, count: int, status: str):
             trade.get("title", ""),
             trade["side"],
             count,
-            None,
+            trade.get("yes_price"),
             trade.get("confidence"),
             trade.get("reasoning"),
             trade.get("_score"),

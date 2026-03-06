@@ -1,16 +1,38 @@
 """
-Rule-based strategy layer — no API calls, runs completely free.
-
-Scoring rules (each adds points toward a trade recommendation):
-  - Price close to 50%     → high uncertainty = opportunity
-  - Closing within 7 days  → time pressure = market should be efficient
-  - High liquidity         → easier to enter/exit
-  - High volume            → active market, tighter spreads
-  - Price skew             → bias toward underdog (contrarian edge)
+Hybrid strategy: rule-based scoring selects candidates, Claude API adds reasoning.
 """
 import os
 from datetime import datetime, timezone
 from db.database import get_conn
+
+def _claude_reason(market: dict, side: str, score: float) -> str:
+    """Ask Claude to reason about this trade. Falls back to rule-based text on error."""
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return None
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        dtc = _days_to_close(market.get("end_date"))
+        msg = (
+            f"Prediction market trade analysis:\n"
+            f"Market: {market['title']}\n"
+            f"Current YES price: {market['yes_price']:.0%}\n"
+            f"Liquidity: ${market.get('liquidity', 0):,.0f}\n"
+            f"Volume: ${market.get('volume', 0):,.0f}\n"
+            f"Days to close: {dtc:.1f if dtc else '?'}\n"
+            f"Recommended side: {side.upper()}\n"
+            f"Rule-based score: {score:.1f}/10\n\n"
+            f"In one concise sentence (max 20 words), explain why this is a good {side.upper()} trade."
+        )
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=60,
+            messages=[{"role": "user", "content": msg}],
+        )
+        return resp.content[0].text.strip()
+    except Exception:
+        return None
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -140,6 +162,7 @@ def run(source: str = "kalshi") -> list[dict]:
             "market_id":          m["market_id"],
             "title":              m["title"],
             "side":               side,
+            "yes_price":          m["yes_price"],
             "reasoning":          reasoning,
             "confidence":         "high" if score >= 5 else "medium" if score >= 3 else "low",
             "suggested_contracts": 5 if score >= 5 else 3 if score >= 3 else 1,
@@ -149,6 +172,16 @@ def run(source: str = "kalshi") -> list[dict]:
     # Sort by score descending, take top N
     scored.sort(key=lambda x: x["_score"], reverse=True)
     trades = scored[:MAX_TRADES]
+
+    # Enrich reasoning with Claude if API key is available
+    if os.getenv("ANTHROPIC_API_KEY") and trades:
+        print(f"[strategy] Asking Claude to reason about {len(trades)} trade(s)...")
+        for t in trades:
+            market = next((m for m in candidates if m["market_id"] == t["market_id"]), None)
+            if market:
+                claude_reason = _claude_reason(market, t["side"], t["_score"])
+                if claude_reason:
+                    t["reasoning"] = claude_reason
 
     print(f"[strategy] {len(trades)} trade(s) recommended")
     return trades
