@@ -1,0 +1,16 @@
+.env
+*.pem
+markets.db
+__pycache__/
+*.pyc
+*.txt
+*_qr.png
+query_check.py
+inspect_db.py
+debug_trades.py
+show_dashboard.py
+export_markets.py
+lookup_market.py
+markets_export.csv
+.venv/
+venv/
